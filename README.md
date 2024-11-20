@@ -1,2 +1,1 @@
-# Movie-Recommendation-System
-# Movie-Recommendation-System
+In this project, my goal is to identify patterns in people's movie preferences by analyzing their viewing and rating history records. I will employ Association Rules Mining to discern which movies and movie genres are commonly watched together. Upon completing the project, my aim is to gain insights into the functioning of a basic recommendation system.# Movie-Recommendation-System

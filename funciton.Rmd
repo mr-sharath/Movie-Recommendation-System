@@ -1,0 +1,292 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(reshape2)
+library(Matrix)
+library(ggplot2)
+library(data.table)
+
+
+```
+
+```{r}
+
+# Load data (adjust file paths as needed)
+movies <- fread('movie.csv')
+ratings <- fread('rating.csv')
+
+```
+
+
+```{r}
+# Correct the title format using regular expressions
+movies$title <- gsub("^(.*), The \\((\\d{4})\\)$", "The \\1 (\\2)", movies$title)
+
+# Check the structure and first few rows of the data
+str(movies)
+head(movies)
+```
+
+```{r}
+# Explore Top Genres
+library(tidyr)
+top_genres <- movies %>%
+  separate_rows(genres, sep = "\\|") %>%
+  count(genres, sort = TRUE) %>%
+  top_n(10, n)
+
+# Plot the Top Genres
+ggplot(top_genres, aes(x = "", y = n, fill = genres)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_minimal() +
+  labs(title = "Top Movie Genres", y = "Count", x = "") +
+  theme(axis.text.x = element_blank())
+
+```
+```{r}
+# Merge ratings with movie names
+ratings_with_name <- merge(ratings, movies, by = "movieId")
+
+# Check the structure of the merged data
+str(ratings_with_name)
+head(ratings_with_name)
+
+```
+
+```{r}
+# Number of Ratings per Movie
+num_rating_df <- ratings_with_name %>%
+  group_by(title) %>%
+  summarise(num_ratings = n())
+
+# Average Ratings per Movie
+avg_rating_df <- ratings_with_name %>%
+  group_by(title) %>%
+  summarise(avg_ratings = mean(rating))
+
+# Merge the Dataframes
+popular_df <- merge(num_rating_df, avg_rating_df, by = "title")
+
+```
+
+```{r}
+popular_df <- popular_df %>%
+  filter(num_ratings >= 250) %>%
+  arrange(desc(avg_ratings)) %>%
+  head(50)
+
+# View the popular movies
+print(popular_df)
+
+```
+
+```{r}
+# Filter users who have rated more than 200 movies
+active_users <- ratings_with_name %>%
+  group_by(userId) %>%
+  summarise(num_ratings = n()) %>%
+  filter(num_ratings > 200) %>%
+  pull(userId)
+
+filtered_ratings <- ratings_with_name %>%
+  filter(userId %in% active_users)
+
+# Filter movies with more than 50 ratings
+popular_movies <- filtered_ratings %>%
+  group_by(title) %>%
+  summarise(num_ratings = n()) %>%
+  filter(num_ratings > 50) %>%
+  pull(title)
+
+final_ratings <- filtered_ratings %>%
+  filter(title %in% popular_movies)
+
+# Create a sparse user-item matrix
+user_item_matrix <- sparseMatrix(
+  i = as.numeric(as.factor(final_ratings$title)),
+  j = as.numeric(as.factor(final_ratings$userId)),
+  x = final_ratings$rating,
+  dimnames = list(levels(as.factor(final_ratings$title)), levels(as.factor(final_ratings$userId)))
+)
+
+```
+
+```{r}
+library(proxy)
+similarity_matrix <- simil(as.matrix(user_item_matrix), method = "cosine")
+similarity_matrix <- as.matrix(similarity_matrix)
+
+```
+
+```{r}
+library(coop)
+
+# Assuming `user_item_matrix` is a dense or sparse matrix
+similarity_matrix <- cosine(as.matrix(user_item_matrix))
+
+```
+
+```{r}
+recommend <- function(movie_name, titles, similarity_matrix) {
+  # Preprocess input (convert to lowercase, trim whitespace)
+  movie_name <- tolower(trimws(movie_name))
+  
+  # Preprocess titles for matching
+  titles_lower <- tolower(trimws(titles))
+  
+  # Look for an exact match
+  matching_indices <- which(titles_lower == movie_name)
+  
+  # If no exact match, perform a fuzzy match using grep for partial matches
+  if (length(matching_indices) == 0) {
+    matching_indices <- grep(movie_name, titles_lower, ignore.case = TRUE)
+  }
+  
+  if (length(matching_indices) > 1) {
+    cat("Multiple matches found for the movie. Please specify:\n")
+    for (i in seq_along(matching_indices)) {
+      cat(i, ": ", titles[matching_indices[i]], "\n")
+    }
+    selected_index <- as.integer(readline("Enter the number corresponding to your selection: "))
+    if (is.na(selected_index) || selected_index < 1 || selected_index > length(matching_indices)) {
+      cat("Invalid selection.\n")
+      return(NULL)
+    }
+    movie_index <- matching_indices[selected_index]
+  } else if (length(matching_indices) == 1) {
+    movie_index <- matching_indices
+  } else {
+    cat("Movie not found in the dataset.\n")
+    return(NULL)
+  }
+  
+  # Get similarity scores for the selected movie
+  similarities <- similarity_matrix[movie_index, ]
+  recommendations <- order(similarities, decreasing = TRUE)[2:6]
+  recommended_movies <- titles[recommendations]
+  
+  return(recommended_movies)
+}
+
+
+```
+
+```{r}
+# Example usage
+titles <- levels(as.factor(final_ratings$title))
+recommend("Cars 2", titles, similarity_matrix)
+
+```
+
+```{r}
+recommend <- function(movie_name, titles, similarity_matrix) {
+  # Convert titles to lowercase for case-insensitive matching
+  titles_lower <- tolower(titles)
+  movie_name <- tolower(movie_name)
+  
+  # Match exact or partial titles
+  matching_indices <- which(titles_lower == movie_name)
+  if (length(matching_indices) == 0) {
+    matching_indices <- grep(movie_name, titles_lower, ignore.case = TRUE)
+    if (length(matching_indices) == 0) {
+      cat("Movie not found in the dataset.\n")
+      return(NULL)
+    }
+  }
+  
+  # Handle multiple matches
+  if (length(matching_indices) > 1) {
+    cat("Multiple matches found for the movie. Please specify:\n")
+    for (i in seq_along(matching_indices)) {
+      cat(i, ": ", titles[matching_indices[i]], "\n")
+    }
+    selected_index <- as.integer(readline("Enter the number corresponding to your selection: "))
+    movie_index <- matching_indices[selected_index]
+  } else {
+    movie_index <- matching_indices
+  }
+  
+  # Get similarity scores for the selected movie
+  similarities <- similarity_matrix[movie_index, ]
+  recommendations <- order(similarities, decreasing = TRUE)[2:6]  # Get top 5 recommendations
+  recommended_movies <- titles[recommendations]
+  return(recommended_movies)
+}
+
+# Example usage
+titles <- levels(as.factor(filtered_ratings$title))  # Assuming titles are extracted from your data
+recommend("Cars 2", titles, similarity_matrix)
+
+```
+
+```{r}
+# Function for recommending movies based on similarity scores
+recommend <- function(movie_name, titles, similarity_matrix) {
+  titles_lower <- tolower(titles)  # Ensure titles are consistent for matching
+  movie_name <- tolower(movie_name)  # Convert input to lowercase for matching
+  
+  # Find indices of matching titles
+  matching_indices <- which(titles_lower == movie_name)
+  if (length(matching_indices) == 0) {
+    matching_indices <- grep(movie_name, titles_lower, ignore.case = TRUE)
+    if (length(matching_indices) == 0) {
+      cat("Movie not found in the dataset.\n")
+      return(NULL)
+    }
+  }
+  
+  # Handle multiple matches
+  if (length(matching_indices) > 1) {
+    cat("Multiple matches found for the movie. Please specify:\n")
+
+    selected_index <- as.integer(readline("Enter the number corresponding to your selection: "))
+    if (is.na(selected_index) || selected_index < 1 || selected_index > length(matching_indices)) {
+      cat("Invalid selection.\n")
+      return(NULL)
+    }
+    movie_index <- matching_indices[selected_index]
+  } else {
+    movie_index <- matching_indices
+  }
+  
+  # Retrieve similarity scores for the selected movie
+  similarities <- similarity_matrix[movie_index, ]
+  recommendations <- order(similarities, decreasing = TRUE)[2:6]  # Select top 5 excluding the movie itself
+  recommended_movies <- titles[recommendations]
+  
+  # Display recommendations
+  cat("Recommended movies for '", titles[movie_index], "':\n", sep = "")
+  print(recommended_movies)
+  
+  return(recommended_movies)
+}
+
+# Example usage:
+titles <- levels(as.factor(filtered_ratings$title))  # Assuming titles are extracted from your data
+recommend("The Avengers", titles, similarity_matrix)
+
+```
+
+```{r}
+similarity_scores <- simil(as.matrix(user_item_matrix), method = "cosine")
+similarity_matrix <- as.matrix(similarity_scores)
+print(head(similarity_matrix))
+
+```
+
+```{r}
+# Number of rows in ratings_with_name
+num_rows_ratings_with_name <- nrow(ratings_with_name)
+print(paste("Number of rows in ratings_with_name:", num_rows_ratings_with_name))
+
+# Number of rows in final_ratings
+num_rows_final_ratings <- nrow(final_ratings)
+print(paste("Number of rows in final_ratings:", num_rows_final_ratings))
+
+```
+
